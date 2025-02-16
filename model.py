@@ -140,14 +140,11 @@ class Qwen2RotaryEmbedding():
 
     def __call__(self, x: np.ndarray, position_ids: np.ndarray) -> tuple:
         # Core RoPE block
-        inv_freq_expanded = np.broadcast_to(self.inv_freq[None, None, :], (position_ids.shape[0], 1, self.inv_freq.shape[0]))
-        position_ids_expanded = position_ids[:, :, None]
-
-        freqs = (position_ids_expanded @ inv_freq_expanded)
-        cos = np.cos(freqs)[:, None].astype(x.dtype)
-        sin = np.sin(freqs)[:, None].astype(x.dtype)
-        cos = np.concatenate((cos, cos), axis=-1)
-        sin = np.concatenate((sin, sin), axis=-1)
+        freqs = (position_ids[:, None] @ self.inv_freq[None, :])
+        cos = np.cos(freqs).astype(x.dtype)
+        sin = np.sin(freqs).astype(x.dtype)
+        cos = np.concatenate((cos, cos), axis=-1)[None, None]
+        sin = np.concatenate((sin, sin), axis=-1)[None, None]
 
         return cos, sin
 
@@ -254,13 +251,12 @@ class Qwen2DecoderLayer():
 
 
 class Embedding:
-    """嵌入层：将输入 ids 的 onehot编码 映射到隐藏层纬度(词嵌入纬度)，实际上是一个矩阵乘法"""
+    """嵌入层：将输入 ids 的 onehot编码 映射到隐藏层纬度(词嵌入纬度)，实际上是一个矩阵乘法，onehot编码后都是0和1，矩阵乘法相当于取出对应行"""
     def __init__(self, model_weights: dict):
         self.weights, self.dequantize = get_weights(model_weights, f'model.embed_tokens.weight')
-        self.one_hot_encoder = np.arange(self.weights.shape[0])
 
     def __call__(self, x: np.ndarray) -> np.ndarray:
-        return (self.one_hot_encoder == x[..., None]).astype(self.weights.dtype) @ dequantize(self.weights, self.dequantize)
+        return dequantize(self.weights, self.dequantize)[x]
 
 
 class Model:
@@ -302,7 +298,7 @@ class Model:
         hidden_states = self.embed_tokens(input_ids)
         
         past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-        position_ids = np.arange(past_seen_tokens, past_seen_tokens + hidden_states.shape[1])[None]
+        position_ids = np.arange(past_seen_tokens, past_seen_tokens + hidden_states.shape[1], dtype=np.float32) # numpy float32 类型速度更快
         # 共享位置编码
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         # 逐层计算，尺寸始终不变：[批大小, 序列长度, hidden_size]

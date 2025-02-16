@@ -331,7 +331,7 @@ class Model:
         max_length = max_new_tokens + input_ids.shape[-1]
         this_peer_finished = False
         model_input_ids_len = input_ids.shape[1]
-        is_benckmark = True
+        is_benckmark = False
         if is_benckmark:
             start_time = 0
         while not this_peer_finished:

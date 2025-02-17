@@ -38,24 +38,21 @@ def logits_processor(input_ids, scores, penalty=1.1, temperature=0.7, top_k=20, 
     score = np.where(score < 0, score * penalty, score / penalty)
     np.put_along_axis(scores, input_ids, score, 1)
 
-    # TemperatureLogitsWarper
-    scores = scores / temperature
-
     # TopKLogitsWarper
     top_k = min(top_k, scores.shape[-1])  # Safety check
-    indices_to_remove_np = scores < np.partition(scores, -top_k)[..., -top_k, None]
-    scores[indices_to_remove_np] = filter_value
+    sorted_indices = np.argpartition(scores, -top_k)[..., -top_k:]
+    sorted_logits = np.take_along_axis(scores, sorted_indices, 1)
+
+    # TemperatureLogitsWarper
+    sorted_logits = sorted_logits / temperature
 
     # TopPLogitsWarper
-    sorted_indices = np.argsort(scores)
-    sorted_logits = np.take_along_axis(scores, sorted_indices, -1)
     cumulative_probs = softmax(sorted_logits).cumsum(axis=-1)
     sorted_indices_to_remove = cumulative_probs <= (1 - top_p)
     sorted_indices_to_remove[..., -min_tokens_to_keep :] = 0
-    np.put_along_axis(sorted_indices_to_remove, sorted_indices, sorted_indices_to_remove, 1)
-    scores[sorted_indices_to_remove] = filter_value
+    sorted_logits[sorted_indices_to_remove] = filter_value
 
-    return scores
+    return sorted_indices, sorted_logits
 
 def get_weights(model_weights: dict, weight_name: str) -> tuple:
     """从字典中获取权重矩阵和反量化参数"""
@@ -122,7 +119,7 @@ class Qwen2RMSNorm():
         self.variance_epsilon = eps
 
     def __call__(self, hidden_states: np.ndarray) -> np.ndarray:
-        variance = np.pow(hidden_states, 2).mean(-1, keepdims=True)
+        variance = (hidden_states * hidden_states).mean(-1, keepdims=True)
         hidden_states = hidden_states / np.sqrt(variance + self.variance_epsilon)
         return self.weight * hidden_states
 
@@ -344,12 +341,12 @@ class Model:
             if is_benckmark and start_time == 0:
                 start_time = time.perf_counter()
             next_token_logits = outputs[:, -1, :]
-            next_token_scores = logits_processor(input_ids, next_token_logits) # 后处理
+            next_token_indices, next_token_scores = logits_processor(input_ids, next_token_logits) # 后处理
             probs = softmax(next_token_scores) # 计算概率
             next_tokens = np.zeros(batch_size, dtype=np.int64)
             for batch_idx in range(batch_size):
                 # 从概率分布中采样一个 token，作为输出
-                next_tokens[batch_idx] = np.random.choice(np.arange(probs.shape[-1], dtype=np.int64), 1, p=probs[batch_idx])[0]
+                next_tokens[batch_idx] = np.random.choice(next_token_indices[batch_idx], 1, p=probs[batch_idx])[0]
             next_tokens = next_tokens * unfinished_sequences + self.pad_token_id * (1 - unfinished_sequences)
             input_ids = np.concat([input_ids, next_tokens[:, None]], axis=-1) # 将新 token 添加到输入中
 

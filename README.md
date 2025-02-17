@@ -70,10 +70,10 @@ if __name__ == '__main__':
 
 |模型|精度|numpy|llama.cpp|
 |:---:|:---:|:---:|:---:|
-|Qwen2.5_0.5B_Instruct|float32|27.90|-|
+|Qwen2.5_0.5B_Instruct|float32|29.77|45.6|
 |Qwen2.5_0.5B_Instruct|float16|-|86.44|
 |Qwen2.5_0.5B_Instruct|q8_0|1.94|140.53|
-|DeepSeek_R1_Distill_Qwen_1.5B|float32|9.91|-|
+|DeepSeek_R1_Distill_Qwen_1.5B|float32|10.31|15.55|
 |DeepSeek_R1_Distill_Qwen_1.5B|float16|-|31.55|
 |DeepSeek_R1_Distill_Qwen_1.5B|q8_0|0.68|54.47|
 

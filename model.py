@@ -332,7 +332,7 @@ class Model:
         if is_benckmark:
             start_time = 0
         while not this_peer_finished:
-            outputs = model(
+            outputs = self(
                 # 第一次输入时，input_ids 为完整的对话文本，之后每次输入只包含最后一个 token，先前的 token 从 KV缓存 中获取
                 input_ids=input_ids if past_key_values is None or past_key_values.get_seq_length()==0 else input_ids[:, -1:], 
                 past_key_values=past_key_values,

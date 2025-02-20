@@ -158,8 +158,10 @@ class Qwen2Attention():
         self.is_causal = True
         self.q_proj_bias = model_weights[f'model.layers.{layer_idx}.self_attn.q_proj.bias']
         self.q_proj_weight, self.q_proj_dequantize = get_weights(model_weights, f'model.layers.{layer_idx}.self_attn.q_proj.weight')
-        self.k_proj_bias = model_weights[f'model.layers.{layer_idx}.self_attn.k_proj.bias']
+        self.k_proj_bias = model_weights[f'model.layers.{layer_idx}.self_attn.k_proj.bias'] * self.scaling
         self.k_proj_weight, self.k_proj_dequantize = get_weights(model_weights, f'model.layers.{layer_idx}.self_attn.k_proj.weight')
+        if self.k_proj_dequantize is None: self.k_proj_weight *= self.scaling
+        else: self.k_proj_dequantize *= self.scaling
         self.v_proj_bias = model_weights[f'model.layers.{layer_idx}.self_attn.v_proj.bias']
         self.v_proj_weight, self.v_proj_dequantize = get_weights(model_weights, f'model.layers.{layer_idx}.self_attn.v_proj.weight')
         self.o_proj_weight, self.o_proj_dequantize = get_weights(model_weights, f'model.layers.{layer_idx}.self_attn.o_proj.weight')
@@ -188,11 +190,11 @@ class Qwen2Attention():
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
         # 计算注意力分数: scores = Q @ K^T / sqrt(d_k)
-        scores = np.einsum("...id,...jd->...ij", query_states, key_states) * self.scaling
+        scores = np.einsum("...id,...jd->...ij", query_states, key_states)
         # 以下代码等效于上面的 np.einsum
         # key_dims = np.arange(key_states.ndim)
         # key_T = key_states.transpose(tuple(key_dims[:-2]) + (key_dims[-1], key_dims[-2]))
-        # scores = query_states @ key_T * self.scaling
+        # scores = query_states @ key_T
         if self.is_causal and query_states.shape[-2] != 1:
             attn_mask = np.tril(np.ones_like(scores, dtype=np.int32))
             scores[attn_mask == 0] = -float("inf") # MASK 未来信息

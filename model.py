@@ -300,7 +300,7 @@ class Model:
     ) -> np.ndarray:
         # ids 映射到 隐藏层纬度：[批大小, 序列长度, hidden_size]
         hidden_states = self.embed_tokens(input_ids)
-        
+
         past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
         position_ids = np.arange(past_seen_tokens, past_seen_tokens + hidden_states.shape[1], dtype=np.float32) # numpy float32 类型速度更快
         # 共享位置编码
@@ -360,7 +360,7 @@ class Model:
             for batch_idx in range(batch_size):
                 eos_token_id_flag[batch_idx] = int(input_ids[batch_idx, -1]) in self.eos_token_id
             stopping_criteria_flag = np.full(unfinished_sequences.shape, input_ids.shape[-1] >= max_length, np.bool)
-            
+
             unfinished_sequences = unfinished_sequences & ~(stopping_criteria_flag|eos_token_id_flag)
             this_peer_finished = unfinished_sequences.max() == 0
 
@@ -393,7 +393,6 @@ if __name__ == '__main__':
 
     model = Model(model_weights_path)
 
-    
     prompt = [
         # "怎么用python numpy实softmax？",
         "你是谁？",

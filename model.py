@@ -114,11 +114,13 @@ class DynamicCache:
 
 
 class Qwen2RMSNorm():
-    def __init__(self, weight: np.ndarray, eps: float=1e-6):
+    def __init__(self, weight: np.ndarray | None, eps: float=1e-6):
         self.weight = weight
         self.variance_epsilon = eps
 
     def __call__(self, hidden_states: np.ndarray) -> np.ndarray:
+        if self.weight is None:
+            return hidden_states
         variance = (hidden_states * hidden_states).mean(-1, keepdims=True)
         hidden_states = hidden_states / np.sqrt(variance + self.variance_epsilon)
         return self.weight * hidden_states
@@ -156,13 +158,16 @@ class Qwen2Attention():
         self.num_key_value_groups = config['num_attention_heads'] // config['num_key_value_heads']
         self.scaling = self.head_dim**-0.5
         self.is_causal = True
-        self.q_proj_bias = model_weights[f'model.layers.{layer_idx}.self_attn.q_proj.bias']
+        self.q_proj_bias = model_weights.get(f'model.layers.{layer_idx}.self_attn.q_proj.bias', 0)
         self.q_proj_weight, self.q_proj_dequantize = get_weights(model_weights, f'model.layers.{layer_idx}.self_attn.q_proj.weight')
-        self.k_proj_bias = model_weights[f'model.layers.{layer_idx}.self_attn.k_proj.bias'] * self.scaling
+        self.q_norm = Qwen2RMSNorm(model_weights.get(f'model.layers.{layer_idx}.self_attn.q_norm.weight', None), eps=config['rms_norm_eps'])
+        self.k_proj_bias = model_weights.get(f'model.layers.{layer_idx}.self_attn.k_proj.bias', 0) * self.scaling
         self.k_proj_weight, self.k_proj_dequantize = get_weights(model_weights, f'model.layers.{layer_idx}.self_attn.k_proj.weight')
-        if self.k_proj_dequantize is None: self.k_proj_weight *= self.scaling
+        self.k_norm = Qwen2RMSNorm(model_weights.get(f'model.layers.{layer_idx}.self_attn.k_norm.weight', None), eps=config['rms_norm_eps'])
+        if self.k_norm.weight is not None: self.k_norm.weight *= self.scaling
+        elif self.k_proj_dequantize is None: self.k_proj_weight *= self.scaling
         else: self.k_proj_dequantize *= self.scaling
-        self.v_proj_bias = model_weights[f'model.layers.{layer_idx}.self_attn.v_proj.bias']
+        self.v_proj_bias = model_weights.get(f'model.layers.{layer_idx}.self_attn.v_proj.bias', 0)
         self.v_proj_weight, self.v_proj_dequantize = get_weights(model_weights, f'model.layers.{layer_idx}.self_attn.v_proj.weight')
         self.o_proj_weight, self.o_proj_dequantize = get_weights(model_weights, f'model.layers.{layer_idx}.self_attn.o_proj.weight')
 
@@ -175,8 +180,8 @@ class Qwen2Attention():
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
         # 计算 Q、K、V，reshape、转置 是为了多头注意力
-        query_states = (hidden_states @ dequantize(self.q_proj_weight, self.q_proj_dequantize) + self.q_proj_bias).reshape(hidden_shape).transpose((0, 2, 1, 3))
-        key_states   = (hidden_states @ dequantize(self.k_proj_weight, self.k_proj_dequantize) + self.k_proj_bias).reshape(hidden_shape).transpose((0, 2, 1, 3))
+        query_states = self.q_norm((hidden_states @ dequantize(self.q_proj_weight, self.q_proj_dequantize) + self.q_proj_bias).reshape(hidden_shape)).transpose((0, 2, 1, 3))
+        key_states   = self.k_norm((hidden_states @ dequantize(self.k_proj_weight, self.k_proj_dequantize) + self.k_proj_bias).reshape(hidden_shape)).transpose((0, 2, 1, 3))
         value_states = (hidden_states @ dequantize(self.v_proj_weight, self.v_proj_dequantize) + self.v_proj_bias).reshape(hidden_shape).transpose((0, 2, 1, 3))
         # 计算 Q、K 的 RoPE，位置编码
         cos, sin = position_embeddings
@@ -197,7 +202,7 @@ class Qwen2Attention():
         # scores = query_states @ key_T
         if self.is_causal and query_states.shape[-2] != 1:
             attn_mask = np.tril(np.ones_like(scores, dtype=np.int32))
-            scores[attn_mask == 0] = -float("inf") # MASK 未来信息
+            scores[attn_mask == 0] = -np.inf # MASK 未来信息
         # 计算注意力输出: attn_output = softmax(scores) @ V
         attn_output = np.einsum("...tij,...tjd->...itd", softmax(scores, axis=-1), value_states)
         # 以下代码等效于上面的 np.einsum
@@ -378,20 +383,23 @@ class Model:
 
 
 if __name__ == '__main__':
-    # chat_template = '<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n'
-    # model_weights_path = '/Users/acai/Downloads/models/Qwen2.5_0.5B_Instruct_npy_FP16'
-    chat_template = '<｜begin▁of▁sentence｜><｜begin▁of▁sentence｜>{}<｜User｜>{}<｜Assistant｜><think>\n'
-    model_weights_path = '/Users/acai/Downloads/models/DeepSeek_R1_Distill_Qwen_1.5B_npy_FP32'
+    # chat_template = '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n'
+    # model_weights_path = '/Users/acai/Downloads/models/Qwen2.5_0.5B_Instruct_npy_FP32'
+    # chat_template = '<｜begin▁of▁sentence｜><｜begin▁of▁sentence｜>You are a helpful assistant.<｜User｜>{}<｜Assistant｜><think>\n'
+    # model_weights_path = '/Users/acai/Downloads/models/DeepSeek_R1_Distill_Qwen_1.5B_npy_FP32'
+    chat_template = '<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n' # no thinking mode
+    # chat_template = '<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n' # thinking mode
+    model_weights_path = '/Users/acai/Downloads/models/Qwen3_0.6B_npy_FP32'
 
     model = Model(model_weights_path)
 
-    role_system_content = "You are a helpful assistant."
+    
     prompt = [
         # "怎么用python numpy实softmax？",
         "你是谁？",
         # "计算456+826",
     ] # 批次
-    text = list(map(lambda x: chat_template.format(role_system_content, x), prompt))
+    text = list(map(lambda x: chat_template.format(x), prompt))
 
     model_inputs = np.array([model.tokenizer.encode_batch_fast(text)[i].ids for i in range(len(text))], dtype=np.int32)
 
